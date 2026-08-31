@@ -273,7 +273,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 </main>
 
 <footer>
-  <div>数据来源：东方财富行情接口（盘中约 3–5 秒延迟），更新时间见右上角。</div>
+  <div>数据来源：指数=腾讯实时行情；涨跌家数/板块/个股榜/周期热榜=东方财富延迟行情（约15分钟延迟，因实时接口对高频访问临时风控）；涨跌停=东方财富专题池。更新时间见右上角。</div>
   <div>交易日/节假日状态按星期与时段近似判断，以交易所实际休市安排为准。</div>
   <div><b>免责声明</b>：本看板仅供行情展示与信息参考，不构成任何投资建议。市场有风险，投资需谨慎。</div>
 </footer>
@@ -282,7 +282,11 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 (function(){
   "use strict";
 
-  var BASE = "https://push2.eastmoney.com/api/qt/";
+  // 主行情接口：东方财富延迟行情域（实时域 push2 被风控时仍稳定可用，约15分钟延迟；CORS/JSONP 均放行）
+  var BASE = "https://push2delay.eastmoney.com/api/qt/";
+  // 指数实时行情：腾讯 qt.gtimg.cn（CORS 放行、稳定、返回 GBK 需转码）
+  var QT_INDEX = "https://qt.gtimg.cn/q=";
+  var TX_INDEX_CODES = ["sh000001","sz399001","sz399006","sh000300","sh000688","bj899050"];
   var PUSH2EX = "https://push2ex.eastmoney.com/";
   var UT = "7eea3edcaed734bea9cbfc24409ed989";
 
@@ -345,13 +349,45 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   function cls(v){ return v>0?"up":(v<0?"down":"flat"); }
 
   // ---------- 指数 ----------
+  // 主源：腾讯实时行情（GBK 转码）；名称用本地映射避免乱码；指数不含涨跌家数
   function loadIndices(){
+    return fetch(QT_INDEX + TX_INDEX_CODES.join(","), {cache:"no-store"}).then(function(r){
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      return r.arrayBuffer();
+    }).then(function(buf){
+      var txt = new TextDecoder("gbk").decode(buf);
+      var lines = txt.split(";");
+      var out = [];
+      TX_INDEX_CODES.forEach(function(key, i){
+        var line = lines[i] || "";
+        var a = line.indexOf('="');
+        if(a < 0) return;
+        var body = line.slice(a+2, line.lastIndexOf('"'));
+        var f = body.split("~");
+        if(f.length < 33 || !f[3]) return;
+        out.push({f12:f[2], f14:IDX_LIST[i].name, f2:parseFloat(f[3]),
+          f4:parseFloat(f[31]), f3:parseFloat(f[32])});
+      });
+      if(!out.length) throw new Error("tx index empty");
+      return out;
+    }).catch(function(){
+      // 兜底：东财延迟行情 ulist（含涨跌家数）
+      var secids = IDX_LIST.map(function(x){return x.secid;}).join(",");
+      var url = BASE + "ulist.np/get?fltt=2&invt=2&fields=f2,f3,f4,f6,f12,f14,f104,f105,f106&secids=" + secids;
+      return getJSON(url).then(function(res){
+        if(!res || !res.data || !res.data.diff) throw new Error("empty index data");
+        return res.data.diff;
+      });
+    });
+  }
+
+  // 涨跌家数/两市成交额：东财延迟行情 ulist（f104涨/f105跌/f106平，f6成交额）
+  function loadBreadth(){
     var secids = IDX_LIST.map(function(x){return x.secid;}).join(",");
     var url = BASE + "ulist.np/get?fltt=2&invt=2&fields=f2,f3,f4,f6,f12,f14,f104,f105,f106&secids=" + secids;
     return getJSON(url).then(function(res){
-      if(!res || !res.data || !res.data.diff) throw new Error("empty index data");
-      return res.data.diff;
-    });
+      return (res && res.data && res.data.diff) || [];
+    }).catch(function(){ return []; });
   }
 
   // ---------- 板块 ----------
@@ -408,6 +444,14 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   }
 
   function renderBreadth(list){
+    if(!list || !list.length){
+      document.getElementById("upCount").textContent = "--";
+      document.getElementById("downCount").textContent = "--";
+      document.getElementById("flatCount").textContent = "--";
+      document.getElementById("turnover").textContent = "--";
+      document.getElementById("breadthBar").innerHTML = "";
+      return;
+    }
     var up=0, down=0, flat=0, turnover=0;
     list.forEach(function(it){
       if(it.f12==="000001" || it.f12==="399001"){
@@ -569,18 +613,47 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     });
   }
 
+  // 新浪日K（JSONP，script 标签加载天然绕过 CORS；不复权数据，作腾讯失败兜底）
+  function fetchKlineSINA(code){
+    var sym = txSecCode(code);
+    var cb = "__sina" + (++jpSeq) + "_" + Date.now();
+    var u = "https://quotes.sina.cn/cn/api/jsonp_v2.php/" + cb
+      + "=/CN_MarketDataService.getKLineData?symbol=" + sym + "&scale=240&ma=no&datalen=320";
+    return new Promise(function(resolve, reject){
+      var s = document.createElement("script");
+      var timer = setTimeout(function(){ cleanup(); reject(new Error("sina timeout")); }, 6000);
+      function cleanup(){ try{ delete window[cb]; }catch(e){} s.remove(); clearTimeout(timer); }
+      window[cb] = function(data){ cleanup(); resolve(data); };
+      s.onerror = function(){ cleanup(); reject(new Error("sina error")); };
+      s.src = u;
+      document.head.appendChild(s);
+    }).then(function(data){
+      if(!data || !data.length) throw new Error("sina empty kline");
+      var out = [], prevC = null;
+      data.forEach(function(k){
+        var c = parseFloat(k.close);
+        out.push({d:k.day, o:parseFloat(k.open), c:c, h:parseFloat(k.high), l:parseFloat(k.low),
+          v:parseFloat(k.volume), amt:0, pct: prevC ? (c-prevC)/prevC*100 : 0});
+        prevC = c;
+      });
+      return out;
+    });
+  }
+
   // ===== 全局K线缓存（跨板块/池共享，按个股代码去重，30分钟TTL） =====
   var gKCache = {};
   var GKC_TTL = 30 * 60 * 1000;
   function getK(code, name){
     var hit = gKCache[code];
     if(hit && Date.now() - hit.ts < GKC_TTL) return Promise.resolve(hit);
-    return fetchKlineTX(code).catch(function(){ return null; }).then(function(k){
-      if(!k) return null;
-      var e = {name:name, code:code, k:k, amtToday:0, ts:Date.now()};
-      gKCache[code] = e;
-      return e;
-    });
+    // 腾讯K线优先，新浪JSONP兜底
+    return fetchKlineTX(code).catch(function(){ return fetchKlineSINA(code); })
+      .then(function(k){
+        if(!k) return null;
+        var e = {name:name, code:code, k:k, amtToday:0, ts:Date.now()};
+        gKCache[code] = e;
+        return e;
+      });
   }
 
   // 板块成分股：按成交额取前 N 只（东财 push2 实时接口，稳定可用）
@@ -873,7 +946,8 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       + "② <b>板块口径</b> = 板块内前8大成交额成分股的周期指标按当日成交额<b>加权聚合</b>（成分股K线为腾讯源，规避东财历史接口风控）；"
       + "③ <b>区间涨幅</b> = 期末相对期初的涨跌幅；<b>上涨天数</b> = 区间内收盘上涨的交易日数（即「多次上涨」），<b>上涨频率</b> = 上涨天数/区间交易日；"
       + "④ <b>综合分</b> = 40%×区间涨幅 + 30%×上涨频率 + 30%×成交活跃度（池内归一化，满分100），默认按综合分降序，点击表头可切换排序；"
-      + "⑤ 大涨天数 = 区间内单日涨跌幅 ≥ 5% 的交易日数；成交活跃度：个股=今日成交额，板块=权重股当日成交额合计。";
+      + "⑤ 大涨天数 = 区间内单日涨跌幅 ≥ 5% 的交易日数；成交活跃度：个股=今日成交额，板块=权重股当日成交额合计；"
+      + "⑥ 候选池列表/板块成分股来自东财<b>延迟行情</b>（约15分钟），周期指标由个股K线精算，不受延迟影响。";
     // 首次加载延迟1.5秒，与当日榜的实时行情请求错峰，避免集中触发接口风控
     setTimeout(function(){ ensurePool(false); }, 1500);
   }
@@ -921,7 +995,8 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       loadSectors("concept").catch(function(){ return []; }),
       loadStocks(true).catch(function(){ return []; }),
       loadStocks(false).catch(function(){ return []; }),
-      loadZtDt()
+      loadZtDt(),
+      loadBreadth()
     ]).then(function(r){
       var list = r[0];
       state.industry = r[1];
@@ -929,7 +1004,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       state.gain = r[3];
       state.loss = r[4];
       renderIndices(list);
-      renderBreadth(list);
+      renderBreadth(r[6]);
       renderZtDt(r[5]);
       renderSectors();
       renderStocks();
