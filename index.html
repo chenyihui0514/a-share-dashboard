@@ -162,6 +162,12 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 .prow .num.w5{width:112px;}
 .prow .num.w6{width:112px;text-align:right;color:var(--sub);font-size:12px;font-weight:500;}
 .prow .score{flex:0 0 auto;width:64px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);}
+.ind-head-row{display:flex;align-items:center;gap:8px;padding:9px 16px;background:#f2f5fb;border-bottom:1px solid var(--line);}
+.ind-tag{font-size:11px;padding:2px 9px;border-radius:10px;font-weight:700;flex:0 0 auto;}
+.ind-tag.inc{background:#fdecec;color:var(--up);}
+.ind-tag.stk{background:#eef2fb;color:var(--accent);}
+.ind-head-row .nm{font-weight:700;font-size:13px;}
+.ind-meta{font-size:12px;color:var(--sub);font-weight:500;margin-left:auto;text-align:right;white-space:nowrap;}
 .sort-arrow{font-size:10px;color:var(--accent);margin-left:2px;}
 
 @media (max-width:1000px){
@@ -272,27 +278,27 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     </div>
   </section>
 
-  <div class="section-title">低估值股票推荐 · 活跃标的 PE / PB 综合筛选</div>
+  <div class="section-title">行业低估推荐 · 增量/存量市场 × 行业内低估值前 3</div>
   <section class="period-card">
     <div class="period-toolbar">
       <span class="pool-tabs" style="border:none;padding:0;">
-        <span style="font-size:13px;font-weight:600;color:var(--txt);">筛选口径：成交活跃 + 盈利 + PE/PB 双低</span>
+        <span style="font-size:13px;font-weight:600;color:var(--txt);">10 个增量/存量行业，每行业推荐行业内低估前 3</span>
       </span>
       <div class="period-meta">
-        <span id="valInfo">待加载</span>
-        <button class="btn" id="valRefresh">重新拉取</button>
+        <span id="indInfo">待加载</span>
+        <button class="btn" id="indRefresh">重新拉取</button>
       </div>
     </div>
-    <div class="period-progress"><div class="bar" id="valBar"></div></div>
-    <div class="period-body" id="valBody">
-      <div class="empty">正在初始化低估值筛选（与周期榜错峰加载）…</div>
+    <div class="period-progress"><div class="bar" id="indBar"></div></div>
+    <div class="period-body" id="indBody">
+      <div class="empty">正在初始化行业低估推荐（拉取行业景气与成分股估值数据）…</div>
     </div>
-    <div class="period-note" id="valNote"></div>
+    <div class="period-note" id="indNote"></div>
   </section>
 </main>
 
 <footer>
-  <div>数据来源：指数=腾讯实时行情；涨跌家数/板块/个股榜/周期热榜/低估值筛选=东方财富延迟行情（约15分钟延迟，因实时接口对高频访问临时风控）；涨跌停=东方财富专题池。更新时间见右上角。</div>
+  <div>数据来源：指数=腾讯实时行情；涨跌家数/板块/个股榜/周期热榜/行业低估推荐=东方财富延迟行情（约15分钟延迟，因实时接口对高频访问临时风控）；涨跌停=东方财富专题池。更新时间见右上角。</div>
   <div>交易日/节假日状态按星期与时段近似判断，以交易所实际休市安排为准。</div>
   <div><b>免责声明</b>：本看板仅供行情展示与信息参考，不构成任何投资建议。市场有风险，投资需谨慎。</div>
 </footer>
@@ -971,136 +977,247 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     setTimeout(function(){ ensurePool(false); }, 1500);
   }
 
-  // ================= 低估值股票推荐（PE / PB 综合筛选） =================
-  // 候选池：沪深A股按当日成交额 TOP 600；硬性过滤：非ST、0<PE≤30、0<PB≤3、总市值≥50亿
-  // 低估分 = 50%×PE归一化 + 50%×PB归一化（池内 min-max，0-100，越低越低估）
-  // 估值数据每天变化不大：缓存60分钟，独立于10秒自动刷新，降低接口风控概率
-  var VAL_CFG = {pages:6, pz:100, peMax:30, pbMax:3, mcapMin:5e9};
-  var valState = {rows:[], ts:0, loading:false};
+  // ================= 行业低估推荐（增量/存量市场 × 行业内低估值前3） =================
+  // 行业景气：东财行业板块 f25=年初至今涨幅（≥+10% 增量 / -10%~+10% 存量 / ≤-10% 减量剔除），f24=60日涨幅
+  // 行业内低估：成分股按成交额前80（剔除B股/ST/退、PE>0、PB>0、市值≥50亿），行业内 PE/PB 归一化后取最低前3
+  // 榜单：增量行业前5 + 存量行业前5（组内按行业内3只平均PE升序），行业间成分股重合≥2只去重；缓存60分钟，独立于自动刷新
+  var IND_CFG = {
+    incN: 25, stkN: 20,          // 候选行业数（增量/存量）
+    memberN: 80,                 // 每行业成分股按当日成交额取前N
+    mcapMin: 5e9,                // 市值下限
+    topInc: 5, topStk: 5,        // 榜单配比
+    maxOverlap: 2                // 行业间成分股重合≥N只视为同质行业，去重
+  };
+  var indState = {groups:[], ts:0, loading:false};
 
-  function loadValPool(){
-    var fs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23";
-    var tasks = [];
-    for(var p=1;p<=VAL_CFG.pages;p++){
-      tasks.push(getJSON(BASE + "clist/get?pn=" + p + "&pz=" + VAL_CFG.pz + "&po=1&np=1&fltt=2&invt=2&fid=f6&fs="
-        + fs + "&fields=f2,f3,f6,f9,f12,f14,f20,f23,f100"));
-    }
-    return Promise.all(tasks).then(function(rs){
-      var list = [], seen = {};
-      rs.forEach(function(r){
-        if(r && r.data && r.data.diff) r.data.diff.forEach(function(it){
-          if(seen[it.f12]) return;
-          seen[it.f12] = 1;
-          list.push(it);
-        });
-      });
-      return list;
-    });
+  function indCls(f25){
+    if(f25 == null) return "dec";
+    if(f25 >= 10) return "inc";
+    if(f25 <= -10) return "dec";
+    return "stk";
   }
+  function indLabel(k){ return k === "inc" ? "增量市场" : "存量市场"; }
 
   function isBadName(name){
     if(name.indexOf("ST") >= 0) return true;
     if(name.indexOf("退") >= 0) return true;
     return false;
   }
-
-  function buildValRows(list){
-    var rows = [];
-    list.forEach(function(it){
-      var pe = it.f9, pb = it.f23, mc = it.f20;
-      if(!it.f14 || isBadName(it.f14)) return;
-      if(!(pe > 0 && pe <= VAL_CFG.peMax)) return;
-      if(!(pb > 0 && pb <= VAL_CFG.pbMax)) return;
-      if(!(mc >= VAL_CFG.mcapMin)) return;
-      rows.push({code:it.f12, name:it.f14, px:it.f2, pct:it.f3, pe:pe, pb:pb, mc:mc, ind:it.f100||""});
-    });
-    if(!rows.length) return rows;
-    function norm(vals){
-      var mn = Infinity, mx = -Infinity;
-      vals.forEach(function(v){ if(v < mn) mn = v; if(v > mx) mx = v; });
-      if(mx === mn) return vals.map(function(){ return 50; });
-      return vals.map(function(v){ return (v - mn) / (mx - mn) * 100; });
-    }
-    var peN = norm(rows.map(function(r){ return r.pe; }));
-    var pbN = norm(rows.map(function(r){ return r.pb; }));
-    rows.forEach(function(r, i){ r.vscore = 0.5 * peN[i] + 0.5 * pbN[i]; });
-    rows.sort(function(a, b){ return a.vscore - b.vscore; }); // 越低越低估
-    return rows;
+  // 非沪深A股过滤：深B(200)/沪B(900)/北交所新段(920) 为 2/9 开头；北交所老段(43/83/87/88) 为 4/8 开头
+  function isNonACode(code){
+    var c0 = code.charAt(0);
+    if(c0 === "2" || c0 === "9") return true;
+    if(c0 === "4" || c0 === "8") return true;
+    return false;
   }
 
-  function renderVal(){
-    var body = document.getElementById("valBody");
-    var rows = valState.rows;
-    if(!rows.length){
-      body.innerHTML = '<div class="empty">暂无符合条件标的（或数据拉取失败，可点击「重新拉取」重试）</div>';
+  // 行业列表 → 剔除申万细分(罗马数字)与"其他xx" → 分类 → 候选
+  function loadIndCandidates(){
+    var fs = "m:90+t:2+f:!50";
+    var url = BASE + "clist/get?pn=1&pz=200&po=1&np=1&fltt=2&invt=2&fid=f6&fs=" + fs + "&fields=f2,f3,f6,f12,f14,f24,f25";
+    return getJSON(url).then(function(res){
+      var all = (res && res.data && res.data.diff) || [];
+      all = all.filter(function(it){
+        if(/[ⅡⅢⅣⅤ]/.test(it.f14)) return false;
+        if(it.f14.indexOf("其他") === 0) return false;
+        return true;
+      });
+      var inc = [], stk = [];
+      all.forEach(function(it){
+        var k = indCls(it.f25);
+        if(k === "inc") inc.push(it);
+        else if(k === "stk") stk.push(it);
+      });
+      inc.sort(function(a, b){ return (b.f25||0) - (a.f25||0); });
+      stk.sort(function(a, b){ return (b.f6||0) - (a.f6||0); });
+      return {inc: inc.slice(0, IND_CFG.incN), stk: stk.slice(0, IND_CFG.stkN)};
+    });
+  }
+
+  // 单个行业：拉成分股 → 行业内低估筛选 → 前3
+  function loadIndMembers(bk){
+    var url = BASE + "clist/get?pn=1&pz=" + IND_CFG.memberN + "&po=1&np=1&fltt=2&invt=2&fid=f6&fs=b:" + bk.f12
+      + "&fields=f2,f3,f6,f9,f12,f14,f20,f23";
+    return getJSON(url).then(function(res){
+      var list = (res && res.data && res.data.diff) || [];
+      var rows = [];
+      list.forEach(function(it){
+        var pe = it.f9, pb = it.f23, mc = it.f20;
+        if(!it.f14 || isBadName(it.f14) || isNonACode(it.f12)) return;
+        if(!(pe > 0 && pb > 0 && mc >= IND_CFG.mcapMin)) return;
+        rows.push({code:it.f12, name:it.f14, px:it.f2, pct:it.f3, pe:pe, pb:pb, mc:mc});
+      });
+      if(rows.length < 3) return null;
+      function norm(vals){
+        var mn = Infinity, mx = -Infinity;
+        vals.forEach(function(v){ if(v < mn) mn = v; if(v > mx) mx = v; });
+        if(mx === mn) return vals.map(function(){ return 50; });
+        return vals.map(function(v){ return (v - mn) / (mx - mn) * 100; });
+      }
+      var peN = norm(rows.map(function(r){ return r.pe; }));
+      var pbN = norm(rows.map(function(r){ return r.pb; }));
+      rows.forEach(function(r, i){ r.vscore = 0.5 * peN[i] + 0.5 * pbN[i]; });
+      rows.sort(function(a, b){ return a.vscore - b.vscore; }); // 行业内相对低估，越低越低估
+      var picks = rows.slice(0, 3);
+      var absN = 0;
+      rows.forEach(function(r){ if(r.pe <= 30 && r.pb <= 3) absN++; });
+      var avgPE = (picks[0].pe + picks[1].pe + picks[2].pe) / 3;
+      return {bk:bk, picks:picks, n:rows.length, absN:absN, avgPE:avgPE};
+    }).catch(function(){ return null; });
+  }
+
+  // 行业间去重：与已入选行业 picks 重合 ≥ maxOverlap 只视为同质，跳过
+  function overlapCount(a, b){
+    var n = 0;
+    a.picks.forEach(function(x){
+      if(b.picks.some(function(y){ return y.code === x.code; })) n++;
+    });
+    return n;
+  }
+
+  // 榜单 = 增量前5 + 存量前5（组内按3只平均PE升序），同质行业去重，不足互补
+  function buildIndGroups(){
+    var groups = indState.groups;
+    var incG = [], stkG = [];
+    groups.forEach(function(g){
+      if(indCls(g.bk.f25) === "inc") incG.push(g);
+      else if(indCls(g.bk.f25) === "stk") stkG.push(g);
+    });
+    incG.sort(function(a, b){ return a.avgPE - b.avgPE; });
+    stkG.sort(function(a, b){ return a.avgPE - b.avgPE; });
+    function pick(list, n){
+      var out = [];
+      for(var i=0;i<list.length && out.length < n;i++){
+        var g = list[i];
+        var dup = out.some(function(o){ return overlapCount(o, g) >= IND_CFG.maxOverlap; });
+        if(!dup) out.push(g);
+      }
+      return out;
+    }
+    var out = pick(incG, IND_CFG.topInc).concat(pick(stkG, IND_CFG.topStk));
+    // 缺额互补：合并剩余候选按平均PE升序补足
+    if(out.length < IND_CFG.topInc + IND_CFG.topStk){
+      var rest = groups.filter(function(g){ return out.indexOf(g) < 0; })
+        .sort(function(a, b){ return a.avgPE - b.avgPE; });
+      var i = 0;
+      while(out.length < IND_CFG.topInc + IND_CFG.topStk && i < rest.length){
+        var g = rest[i++];
+        if(out.some(function(o){ return overlapCount(o, g) >= IND_CFG.maxOverlap; })) continue;
+        out.push(g);
+      }
+    }
+    return out.slice(0, IND_CFG.topInc + IND_CFG.topStk);
+  }
+
+  function renderInd(){
+    var body = document.getElementById("indBody");
+    var groups = buildIndGroups();
+    if(!groups.length){
+      body.innerHTML = '<div class="empty">暂无符合条件行业（或数据拉取失败，可点击「重新拉取」重试）</div>';
       return;
     }
-    var head = '<div class="prow head"><span class="rank">#</span>'
+    var html = '<div class="prow head"><span class="rank">#</span>'
       + '<span class="nm">名称</span><span class="cd">代码</span>'
       + '<span class="num w3">最新价</span>'
       + '<span class="num w1">涨跌幅</span>'
       + '<span class="num w4">市盈率</span>'
       + '<span class="num w4">市净率</span>'
       + '<span class="num w5">总市值</span>'
-      + '<span class="num w6">行业</span>'
       + '<span class="score">低估分</span></div>';
-    var html = head;
-    rows.slice(0, 50).forEach(function(r, i){
-      var c = cls(r.pct);
-      html += '<div class="prow">'
-        + '<span class="rank'+(i<3?' top':'')+'">'+(i+1)+'</span>'
-        + '<span class="nm">'+r.name+'</span>'
-        + '<span class="cd">'+r.code+'</span>'
-        + '<span class="num w3">'+fmtNum(r.px)+'</span>'
-        + '<span class="num w1 ' + c + '">'+fmtPct(r.pct)+'</span>'
-        + '<span class="num w4">'+r.pe.toFixed(1)+'</span>'
-        + '<span class="num w4">'+r.pb.toFixed(2)+'</span>'
-        + '<span class="num w5">'+fmtAmount(r.mc)+'</span>'
-        + '<span class="num w6">'+r.ind+'</span>'
-        + '<span class="score">'+r.vscore.toFixed(0)+'</span>'
+    var incN = 0, stkN = 0;
+    groups.forEach(function(g, gi){
+      var tag = indCls(g.bk.f25) === "inc" ? "inc" : "stk";
+      if(tag === "inc") incN++; else stkN++;
+      html += '<div class="ind-head-row">'
+        + '<span class="rank">' + (gi+1) + '</span>'
+        + '<span class="ind-tag ' + tag + '">' + indLabel(tag) + '</span>'
+        + '<span class="nm">' + g.bk.f14 + '</span>'
+        + '<span class="ind-meta">年初至今 <b class="' + cls(g.bk.f25) + '">' + fmtPct(g.bk.f25) + '</b> · 60日 ' + fmtPct(g.bk.f24)
+        + ' · 3只平均PE <b>' + g.avgPE.toFixed(1) + '</b> · 行业绝对低估 ' + g.absN + ' 只</span>'
         + '</div>';
+      g.picks.forEach(function(p, j){
+        var c = cls(p.pct);
+        html += '<div class="prow">'
+          + '<span class="rank">' + (j+1) + '</span>'
+          + '<span class="nm">' + p.name + '</span>'
+          + '<span class="cd">' + p.code + '</span>'
+          + '<span class="num w3">' + fmtNum(p.px) + '</span>'
+          + '<span class="num w1 ' + c + '">' + fmtPct(p.pct) + '</span>'
+          + '<span class="num w4">' + p.pe.toFixed(1) + '</span>'
+          + '<span class="num w4">' + p.pb.toFixed(2) + '</span>'
+          + '<span class="num w5">' + fmtAmount(p.mc) + '</span>'
+          + '<span class="score">' + p.vscore.toFixed(0) + '</span>'
+          + '</div>';
+      });
     });
-    if(rows.length > 50) html += '<div class="empty">仅显示前 50 名，共 '+rows.length+' 只符合条件</div>';
+    if(groups.length < IND_CFG.topInc + IND_CFG.topStk){
+      html += '<div class="empty">可推荐行业共 ' + groups.length + ' 个（增量 ' + incN + ' / 存量 ' + stkN + '）</div>';
+    }
     body.innerHTML = html;
-    document.getElementById("valInfo").textContent =
-      rows.length + " 只符合条件 · 缓存于 " + new Date(valState.ts).toLocaleTimeString();
+    document.getElementById("indInfo").textContent =
+      groups.length + " 个行业（增量 " + incN + " / 存量 " + stkN + "）· 缓存于 " + new Date(indState.ts).toLocaleTimeString();
   }
 
-  function ensureVal(force){
-    var fresh = valState.rows.length && valState.ts && (Date.now() - valState.ts < 60*60*1000);
-    if(fresh && !force){ renderVal(); return; }
-    if(valState.loading) return;
-    valState.loading = true;
-    var bar = document.getElementById("valBar");
-    var info = document.getElementById("valInfo");
-    bar.style.width = "10%";
-    info.textContent = "正在拉取成交额 TOP " + (VAL_CFG.pages*VAL_CFG.pz) + " 候选…";
-    loadValPool().then(function(list){
-      info.textContent = "候选 " + list.length + " 只，正在筛选低估值标的…";
-      valState.rows = buildValRows(list);
-      valState.ts = Date.now();
-      renderVal();
-    }).catch(function(err){
+  function loadIndData(){
+    var bar = document.getElementById("indBar");
+    var info = document.getElementById("indInfo");
+    bar.style.width = "5%";
+    info.textContent = "正在获取行业列表…";
+    return loadIndCandidates().then(function(cand){
+      var list = cand.inc.concat(cand.stk);
+      if(!list.length) throw new Error("no industry candidates");
+      var total = list.length, done = 0;
+      bar.style.width = "12%";
+      info.textContent = "候选行业 " + total + " 个（增量 " + cand.inc.length + " / 存量 " + cand.stk.length + "），拉取成分股估值…";
+      var queue = list.slice();
+      function worker(){
+        if(!queue.length) return Promise.resolve();
+        var bk = queue.shift();
+        return loadIndMembers(bk).then(function(g){
+          if(g) indState.groups.push(g);
+          done++;
+          bar.style.width = Math.round(12 + done/total*83) + "%";
+          info.textContent = "拉取成分股 " + done + "/" + total;
+        }).catch(function(){}).then(function(){ return worker(); });
+      }
+      var ws = [];
+      for(var i=0;i<8;i++) ws.push(worker());
+      return Promise.all(ws);
+    }).then(function(){
+      indState.ts = Date.now();
+      renderInd();
+    });
+  }
+
+  function ensureInd(force){
+    var fresh = indState.groups.length && indState.ts && (Date.now() - indState.ts < 60*60*1000);
+    if(fresh && !force){ renderInd(); return; }
+    if(indState.loading) return;
+    indState.loading = true;
+    indState.groups = [];
+    loadIndData().catch(function(err){
       console.error(err);
-      info.textContent = "拉取失败（可能被限流）";
-      document.getElementById("valBody").innerHTML =
+      document.getElementById("indInfo").textContent = "拉取失败（可能被限流）";
+      document.getElementById("indBody").innerHTML =
         '<div class="empty">数据拉取失败（可能被限流），请稍后点击「重新拉取」重试</div>';
     }).finally(function(){
-      valState.loading = false;
-      bar.style.width = "0";
+      indState.loading = false;
+      document.getElementById("indBar").style.width = "0";
     });
   }
 
-  function initVal(){
-    document.getElementById("valRefresh").addEventListener("click", function(){ ensureVal(true); });
-    document.getElementById("valNote").innerHTML =
-      "筛选口径：① 候选池 = 沪深A股按<b>当日成交额</b>取前 " + (VAL_CFG.pages*VAL_CFG.pz) + " 只活跃标的（剔除北交所）；"
-      + "② 硬性条件：剔除 ST/退市风险，<b>0 &lt; 市盈率(动) ≤ " + VAL_CFG.peMax + "</b>（排除亏损与高估值），"
-      + "<b>0 &lt; 市净率 ≤ " + VAL_CFG.pbMax + "</b>（排除负净资产），<b>总市值 ≥ 50亿</b>（规避微盘）；"
-      + "③ <b>低估分</b> = 50%×PE归一化 + 50%×PB归一化（池内 min-max，0-100），<b>分值越低估值越低</b>，默认按低估分升序；"
-      + "④ 估值/行情为延迟数据（约15分钟），每日缓存60分钟；本榜仅为<b>自下而上选股线索</b>，不构成投资建议，买入前请结合财报与行业景气度复核。";
-    // 与当日榜/周期榜进一步错峰：页面加载后 3 秒再拉取
-    setTimeout(function(){ ensureVal(false); }, 3000);
+  function initInd(){
+    document.getElementById("indRefresh").addEventListener("click", function(){ ensureInd(true); });
+    document.getElementById("indNote").innerHTML =
+      "口径说明：① <b>行业景气</b> = 东财行业板块<b>年初至今涨幅 f25</b>：≥+10% 为<b>增量市场</b>，-10%~+10% 为<b>存量市场</b>，≤-10% 为<b>减量市场（剔除）</b>；"
+      + "候选行业 = 增量按年内涨幅取前 " + IND_CFG.incN + " + 存量按成交额取前 " + IND_CFG.stkN + "（剔除申万细分等级与\"其他××\"垃圾分类）；"
+      + "② <b>行业内低估</b> = 该行业成分股按当日成交额前 " + IND_CFG.memberN + " 只，剔除 B股/北交所/ST/退市/亏损（PE&lt;0），要求 PB&gt;0、总市值≥50亿；"
+      + "行业内按 <b>PE/PB 归一化低估分升序</b>取前 3（即该行业内最被低估的3只，越小越低估）；"
+      + "③ <b>榜单</b> = <b>增量行业前 " + IND_CFG.topInc + " + 存量行业前 " + IND_CFG.topStk + "</b>，组内按行业内3只<b>平均PE升序</b>（低估深度优先）；"
+      + "行业间选股重合 ≥ " + IND_CFG.maxOverlap + " 只视为同质行业自动去重（如 贵金属/黄金、有色金属/工业金属）；"
+      + "④ 行情/估值为<b>延迟数据</b>（约15分钟），缓存60分钟；仅为选股线索参考，不构成投资建议，买入前请结合财报与行业景气度复核。";
+    // 与当日榜/周期榜错峰：页面加载后 3.5 秒再拉取
+    setTimeout(function(){ ensureInd(false); }, 3500);
   }
 
   // ---------- 状态与时钟 ----------
@@ -1204,7 +1321,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   updateClock();
   setInterval(updateClock, 1000);
   initPeriod();
-  initVal();
+  initInd();
   refreshAll();
 })();
 </script>
