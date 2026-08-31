@@ -129,6 +129,40 @@ main{max-width:1280px;margin:20px auto 0;padding:0 20px;}
 /* ===== 底部 ===== */
 footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-size:12px;line-height:1.9;text-align:center;}
 
+/* ===== 周期热榜 ===== */
+.period-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-top:12px;overflow:hidden;}
+.period-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);}
+.period-btns{display:flex;gap:4px;background:#f0f2f5;border-radius:8px;padding:3px;}
+.period-btns button{border:none;background:none;font-size:13px;font-weight:600;color:var(--sub);padding:5px 14px;border-radius:6px;cursor:pointer;transition:.15s;}
+.period-btns button.active{background:#fff;color:var(--accent);box-shadow:0 1px 3px rgba(20,30,60,.1);}
+.pool-tabs{display:flex;gap:4px;}
+.pool-tabs button{border:1px solid var(--line);background:#fff;color:var(--txt);padding:5px 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;transition:.15s;}
+.pool-tabs button.active{background:#eef2fb;border-color:var(--accent);color:var(--accent);font-weight:600;}
+.period-meta{display:flex;align-items:center;gap:10px;margin-left:auto;font-size:12px;color:var(--sub);flex-wrap:wrap;}
+.period-progress{height:4px;background:#eef0f4;overflow:hidden;}
+.period-progress .bar{height:100%;width:0;background:var(--accent);transition:width .2s;}
+.period-note{font-size:11px;color:var(--sub);padding:8px 16px;border-top:1px solid var(--line);line-height:1.8;}
+.period-body{max-height:640px;overflow-y:auto;}
+.period-body::-webkit-scrollbar{width:8px;}
+.period-body::-webkit-scrollbar-thumb{background:#d6dbe2;border-radius:4px;}
+.prow{display:flex;align-items:center;padding:9px 16px;gap:8px;font-size:13px;}
+.prow:hover{background:#f7f9fc;}
+.prow.head{color:var(--sub);font-size:12px;border-bottom:1px solid var(--line);padding:8px 16px;cursor:pointer;user-select:none;}
+.prow.head:hover{background:#f7f9fc;}
+.prow .rank{width:26px;text-align:center;font-size:12px;color:var(--sub);flex:0 0 auto;font-variant-numeric:tabular-nums;}
+.prow .rank.top{color:#fff;background:var(--accent);border-radius:4px;font-weight:700;}
+.prow .nm{flex:1.2;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;}
+.prow .cd{color:var(--sub);font-size:12px;width:64px;flex:0 0 auto;font-variant-numeric:tabular-nums;}
+.prow .num{flex:0 0 auto;text-align:right;font-variant-numeric:tabular-nums;}
+.prow .num.pct{font-weight:700;}
+.prow .num.w1{width:96px;}
+.prow .num.w2{width:118px;}
+.prow .num.w3{width:84px;}
+.prow .num.w4{width:70px;}
+.prow .num.w5{width:112px;}
+.prow .score{flex:0 0 auto;width:64px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);}
+.sort-arrow{font-size:10px;color:var(--accent);margin-left:2px;}
+
 @media (max-width:1000px){
   .indices{grid-template-columns:repeat(3,1fr);}
   .breadth{grid-template-columns:1fr;}
@@ -193,7 +227,33 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     </div>
   </section>
 
-  <div class="section-title">板块与个股</div>
+  <div class="section-title">周期热榜 · 多周期多次上涨排行（热度 × 区间涨幅综合）</div>
+  <section class="period-card">
+    <div class="period-toolbar">
+      <div class="period-btns" id="periodBtns">
+        <button data-period="m1">1个月</button>
+        <button data-period="m3" class="active">3个月</button>
+        <button data-period="m6">6个月</button>
+        <button data-period="y1">1年</button>
+      </div>
+      <div class="pool-tabs" id="poolTabs">
+        <button data-pool="industry" class="active">行业板块</button>
+        <button data-pool="concept">概念板块</button>
+        <button data-pool="stock">个股</button>
+      </div>
+      <div class="period-meta">
+        <span id="poolInfo">待加载</span>
+        <button class="btn" id="poolRefresh">重新拉取</button>
+      </div>
+    </div>
+    <div class="period-progress"><div class="bar" id="poolBar"></div></div>
+    <div class="period-body" id="periodBody">
+      <div class="empty">首次加载需拉取历史K线（约 10–25 秒），正在初始化…</div>
+    </div>
+    <div class="period-note" id="periodNote"></div>
+  </section>
+
+  <div class="section-title">板块与个股（当日榜）</div>
   <section class="columns">
     <div class="card">
       <div class="card-head">
@@ -427,6 +487,322 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     body.innerHTML = html;
   }
 
+  // ================= 周期热榜（多周期 × 多次上涨排行） =================
+  // 数据源：板块K线走东方财富历史接口（多域名轮询容错）；个股K线走腾讯（CORS放行、稳定）
+  var EM_HIS_HOSTS = ["push2his.eastmoney.com","16.push2his.eastmoney.com","17.push2his.eastmoney.com",
+    "18.push2his.eastmoney.com","19.push2his.eastmoney.com","20.push2his.eastmoney.com",
+    "21.push2his.eastmoney.com","22.push2his.eastmoney.com","23.push2his.eastmoney.com"];
+  var TX_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get";
+
+  var POOL_CFG = {
+    industry:{fs:"m:90+t:2+f:!50", n:60,  label:"行业板块 · 全市场按当日成交额取前 60"},
+    concept: {fs:"m:90+t:3+f:!50", n:150, label:"概念板块 · 按当日成交额取前 150（已剔除宽基指数类）"},
+    stock:   {fs:"m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23", n:300, label:"个股 · 全市场按当日成交额取前 300"}
+  };
+  // 宽基/资金通道类概念，非题材热点，剔除
+  var POOL_BAN = ["融资融券","深股通","沪股通","富时","MSCI","标普","AH股","转融","中字头","机构重仓",
+    "QFII","证金","汇金","央视","沪港深","深港通","两融","基金重仓","社保重仓","保险重仓","券商重仓",
+    "msci","罗素","国企改革","央国企","破净","低价股","微盘股","预盈预增","预亏预减","股权激励",
+    "转债","可转债","独角兽","次新股","壳资源","退市","ST板块","昨日涨停","昨日连板","昨日触板"];
+  var PERIODS = {m1:{bars:22}, m3:{bars:64}, m6:{bars:125}, y1:{bars:245}};
+  var PERIOD_LABEL = {m1:"1个月", m3:"3个月", m6:"6个月", y1:"1年"};
+
+  var periodState = {pool:"industry", period:"m3", sort:"score", caches:{}};
+
+  function dateStr(offsetDays, sep){
+    var d = new Date(Date.now() + (new Date().getTimezoneOffset()+480)*60000);
+    d.setDate(d.getDate() - offsetDays);
+    var y = d.getFullYear(), m = ("0"+(d.getMonth()+1)).slice(-2), dd = ("0"+d.getDate()).slice(-2);
+    return sep ? (y+"-"+m+"-"+dd) : (""+y+m+dd);
+  }
+
+  // 多域名轮询：依次尝试直到成功
+  function getJSONMulti(urls){
+    var i = 0;
+    function next(){
+      if(i >= urls.length) return Promise.reject(new Error("all hosts failed"));
+      var u = urls[i++];
+      return getJSON(u).catch(function(){ return next(); });
+    }
+    return next();
+  }
+
+  // 东财日K（板块/指数/个股通用）→ 标准数组 {d,o,c,h,l,v,amt,pct}
+  function fetchKlineEM(secid){
+    var beg = dateStr(370, ""), end = dateStr(0, "");
+    var path = "/api/qt/stock/kline/get?secid=" + secid + "&klt=101&fqt=1&lmt=0&beg=" + beg + "&end=" + end
+      + "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61";
+    var urls = EM_HIS_HOSTS.map(function(h){ return "https://" + h + path; });
+    return getJSONMulti(urls).then(function(res){
+      var klines = res && res.data && res.data.klines;
+      if(!klines || !klines.length) throw new Error("em empty kline");
+      return klines.map(function(s){
+        var a = s.split(",");
+        return {d:a[0], o:parseFloat(a[1]), c:parseFloat(a[2]), h:parseFloat(a[3]), l:parseFloat(a[4]),
+          v:parseFloat(a[5]), amt:parseFloat(a[6]), pct:parseFloat(a[8])};
+      });
+    });
+  }
+
+  // 腾讯日K（个股）→ 标准数组
+  function txSecCode(code){
+    if(code.charAt(0)==="6" || code.charAt(0)==="9" || code.charAt(0)==="5") return "sh" + code;
+    if(code.charAt(0)==="0" || code.charAt(0)==="3" || code.charAt(0)==="2") return "sz" + code;
+    return "bj" + code;
+  }
+  function fetchKlineTX(code){
+    var beg = dateStr(370, "-"), end = dateStr(0, "-");
+    var key = txSecCode(code);
+    var u = TX_KLINE + "?param=" + key + ",day," + beg + "," + end + ",320,qfq";
+    return getJSON(u).then(function(res){
+      var d = (res && res.data && (res.data[key] || res.data[code])) || {};
+      var arr = d.qfqday || d.day || [];
+      if(!arr.length) throw new Error("tx empty kline");
+      var out = [], prevC = null;
+      arr.forEach(function(k){
+        var c = parseFloat(k[2]);
+        out.push({d:k[0], o:parseFloat(k[1]), c:c, h:parseFloat(k[3]), l:parseFloat(k[4]),
+          v:parseFloat(k[5]), amt:0, pct: prevC ? (c-prevC)/prevC*100 : 0});
+        prevC = c;
+      });
+      return out;
+    });
+  }
+
+  function isBanned(name){
+    for(var i=0;i<POOL_BAN.length;i++) if(name.indexOf(POOL_BAN[i]) >= 0) return true;
+    return false;
+  }
+
+  // 拉取池子列表（行业/概念 1 页，个股 5 页，按成交额降序）
+  function fetchPoolList(key){
+    var cfg = POOL_CFG[key];
+    var pages = key==="stock" ? 5 : 1;
+    var tasks = [];
+    for(var p=1;p<=pages;p++){
+      tasks.push(getJSON(BASE + "clist/get?pn=" + p + "&pz=100&po=1&np=1&fltt=2&invt=2&fid=f6&fs="
+        + cfg.fs + "&fields=f2,f3,f6,f12,f13,f14"));
+    }
+    return Promise.all(tasks).then(function(rs){
+      var list = [], seen = {};
+      rs.forEach(function(r){
+        if(r && r.data && r.data.diff) r.data.diff.forEach(function(it){
+          if(seen[it.f12]) return;
+          seen[it.f12] = 1;
+          if(key !== "stock" && isBanned(it.f14)) return;
+          list.push(it);
+        });
+      });
+      return list.slice(0, cfg.n);
+    });
+  }
+
+  // 并发拉取池内全部K线，写缓存
+  function loadPoolKlines(key, list){
+    var cache = periodState.caches[key];
+    var total = list.length, done = 0;
+    var queue = list.slice();
+    var CONC = key==="stock" ? 12 : 6;
+    var bar = document.getElementById("poolBar");
+    function tick(){
+      done++;
+      bar.style.width = Math.round(done/total*100) + "%";
+      document.getElementById("poolInfo").textContent =
+        "拉取历史数据 " + done + "/" + total + "（" + Math.round(done/total*100) + "%）";
+    }
+    function worker(){
+      if(!queue.length) return Promise.resolve();
+      var it = queue.shift();
+      var p = key==="stock"
+        ? fetchKlineTX(it.f12).catch(function(){ return fetchKlineEM(it.f13 + "." + it.f12); })
+        : fetchKlineEM("90." + it.f12);
+      return p.then(function(k){
+        cache.klines[it.f12] = {name:it.f14, code:it.f12, k:k, amtToday:it.f6||0};
+      }).catch(function(){ /* 单只失败跳过 */ })
+      .then(function(){ tick(); return worker(); });
+    }
+    var workers = [];
+    for(var i=0;i<CONC;i++) workers.push(worker());
+    return Promise.all(workers).then(function(){
+      cache.list = list;
+      cache.ts = Date.now();
+    });
+  }
+
+  // 周期指标：区间涨幅 / 上涨天数 / 上涨频率 / 大涨天数(≥5%) / 区间日均成交额
+  function calcStats(entry, periodKey){
+    var k = entry.k, bars = PERIODS[periodKey].bars;
+    var n = k.length;
+    if(n < 3) return null;
+    var cnt = Math.min(bars, n - 1);
+    var base = k[n-1-cnt].c;
+    var last = k[n-1].c;
+    var chg = (last - base) / base * 100;
+    var upDays = 0, bigDays = 0, sumAmt = 0;
+    for(var i = n-1-cnt; i < n; i++){
+      if(k[i].pct > 0) upDays++;
+      if(k[i].pct >= 5) bigDays++;
+      sumAmt += k[i].amt;
+    }
+    return {chg:chg, upDays:upDays, days:cnt, freq:upDays/cnt*100, bigDays:bigDays,
+      amtAvg: cnt>0 ? sumAmt/cnt : 0};
+  }
+
+  // 综合分 = 40%×区间涨幅 + 30%×上涨频率 + 30%×成交活跃度（池内 min-max 归一化）
+  function buildRows(){
+    var cache = periodState.caches[periodState.pool];
+    var rows = [];
+    for(var code in cache.klines){
+      var e = cache.klines[code];
+      var st = calcStats(e, periodState.period);
+      if(!st) continue;
+      rows.push({code:code, name:e.name, st:st,
+        amt: periodState.pool==="stock" ? e.amtToday : st.amtAvg});
+    }
+    function norm(arr){
+      var mn = Infinity, mx = -Infinity;
+      arr.forEach(function(v){ if(v < mn) mn = v; if(v > mx) mx = v; });
+      if(mx === mn) return arr.map(function(){ return 50; });
+      return arr.map(function(v){ return (v - mn) / (mx - mn) * 100; });
+    }
+    var c = norm(rows.map(function(r){ return r.st.chg; }));
+    var f = norm(rows.map(function(r){ return r.st.freq; }));
+    var a = norm(rows.map(function(r){ return r.amt; }));
+    rows.forEach(function(r, i){
+      r.score = 0.4*c[i] + 0.3*f[i] + 0.3*a[i];
+    });
+    return rows;
+  }
+
+  function sortRows(rows){
+    var key = periodState.sort, dir = key==="chg"||key==="freq"||key==="score" ? -1 : -1;
+    rows.sort(function(x, y){
+      var a = key==="score" ? x.score : key==="chg" ? x.st.chg : key==="freq" ? x.st.freq
+        : key==="upDays" ? x.st.upDays : key==="amt" ? x.amt : x.st.bigDays;
+      var b = key==="score" ? y.score : key==="chg" ? y.st.chg : key==="freq" ? y.st.freq
+        : key==="upDays" ? y.st.upDays : key==="amt" ? y.amt : y.st.bigDays;
+      return b - a;
+    });
+    return rows;
+  }
+
+  function pctColorHtml(v){
+    var c = cls(v);
+    return '<span class="num pct w1 ' + c + '">' + fmtPct(v) + '</span>';
+  }
+
+  function renderPeriod(){
+    var body = document.getElementById("periodBody");
+    var cache = periodState.caches[periodState.pool];
+    if(!cache || !cache.klines || !cache.list){
+      body.innerHTML = '<div class="empty">正在初始化数据…</div>';
+      return;
+    }
+    var rows = sortRows(buildRows());
+    var keys = Object.keys(cache.klines).length;
+    var head = '<div class="prow head" data-sort="score"><span class="rank">#</span>'
+      + '<span class="nm">名称</span><span class="cd">代码</span>'
+      + '<span class="num w1" data-sort="chg">区间涨幅</span>'
+      + '<span class="num w2" data-sort="upDays">上涨天数/交易日</span>'
+      + '<span class="num w3" data-sort="freq">上涨频率</span>'
+      + '<span class="num w4" data-sort="bigDays">大涨天数</span>'
+      + '<span class="num w5" data-sort="amt">成交活跃度</span>'
+      + '<span class="score" data-sort="score">综合分</span></div>';
+    var html = head;
+    if(!rows.length){
+      html += '<div class="empty">数据拉取失败，请点击右上角「重新拉取」重试</div>';
+    } else {
+      rows.slice(0, 50).forEach(function(r, i){
+        var st = r.st;
+        html += '<div class="prow">'
+          + '<span class="rank'+(i<3?' top':'')+'">'+(i+1)+'</span>'
+          + '<span class="nm">'+r.name+'</span>'
+          + '<span class="cd">'+r.code+'</span>'
+          + pctColorHtml(st.chg)
+          + '<span class="num w2">'+st.upDays+'<span style="color:var(--sub);font-size:11px;"> / '+st.days+'</span></span>'
+          + '<span class="num w3 ' + cls(st.freq-50) + '">'+st.freq.toFixed(1)+'%</span>'
+          + '<span class="num w4">'+st.bigDays+'</span>'
+          + '<span class="num w5">'+fmtAmount(r.amt)+'</span>'
+          + '<span class="score">'+r.score.toFixed(1)+'</span>'
+          + '</div>';
+      });
+      if(rows.length > 50) html += '<div class="empty">仅显示前 50 名，共 '+rows.length+' 条</div>';
+    }
+    body.innerHTML = html;
+    body.querySelectorAll("[data-sort]").forEach(function(el){
+      el.addEventListener("click", function(){
+        periodState.sort = el.getAttribute("data-sort");
+        renderPeriod();
+      });
+    });
+    document.getElementById("poolInfo").textContent =
+      cache.list.length + " 个候选 · " + keys + " 只有效K线 · 缓存于 " + new Date(cache.ts).toLocaleTimeString();
+  }
+
+  var periodLoading = false;
+  function ensurePool(force){
+    var cache = periodState.caches[periodState.pool];
+    var fresh = cache && cache.list && cache.ts && (Date.now() - cache.ts < 30*60*1000);
+    if(fresh && !force){
+      renderPeriod();
+      return;
+    }
+    if(periodLoading) return;
+    periodLoading = true;
+    var bar = document.getElementById("poolBar");
+    bar.style.width = "3%";
+    document.getElementById("poolInfo").textContent = "正在获取候选列表…";
+    fetchPoolList(periodState.pool).then(function(list){
+      if(!periodState.caches[periodState.pool]){
+        periodState.caches[periodState.pool] = {list:[], klines:{}};
+      }
+      periodState.caches[periodState.pool].klines = {};
+      document.getElementById("poolInfo").textContent = "候选 " + list.length + " 个，开始拉取K线…";
+      return loadPoolKlines(periodState.pool, list);
+    }).then(function(){
+      renderPeriod();
+      document.getElementById("poolInfo").textContent =
+        "候选 " + (periodState.caches[periodState.pool].list.length) + " 个，数据就绪（缓存30分钟）";
+    }).catch(function(err){
+      console.error(err);
+      document.getElementById("poolInfo").textContent = "拉取失败，可重试";
+      document.getElementById("periodBody").innerHTML =
+        '<div class="empty">数据拉取失败（可能被限流），请稍后点击「重新拉取」重试</div>';
+    }).finally(function(){
+      periodLoading = false;
+      bar.style.width = "0";
+    });
+  }
+
+  function initPeriod(){
+    // 周期按钮
+    document.querySelectorAll("#periodBtns button").forEach(function(b){
+      b.addEventListener("click", function(){
+        document.querySelectorAll("#periodBtns button").forEach(function(x){ x.classList.remove("active"); });
+        b.classList.add("active");
+        periodState.period = b.getAttribute("data-period");
+        renderPeriod();
+      });
+    });
+    // 池子切换
+    document.querySelectorAll("#poolTabs button").forEach(function(b){
+      b.addEventListener("click", function(){
+        document.querySelectorAll("#poolTabs button").forEach(function(x){ x.classList.remove("active"); });
+        b.classList.add("active");
+        periodState.pool = b.getAttribute("data-pool");
+        periodState.sort = "score";
+        ensurePool(false);
+      });
+    });
+    document.getElementById("poolRefresh").addEventListener("click", function(){ ensurePool(true); });
+    document.getElementById("periodNote").innerHTML =
+      "口径说明：① 候选池 = 全市场按<b>当日成交额</b>筛选的热门标的（行业60/概念150/个股300），个股K线前复权；"
+      + "② <b>区间涨幅</b> = 期末收盘相对期初的涨跌幅；<b>上涨天数</b> = 区间内收盘上涨的交易日数（即「多次上涨」），<b>上涨频率</b> = 上涨天数/区间交易日；"
+      + "③ <b>综合分</b> = 40%×区间涨幅 + 30%×上涨频率 + 30%×成交活跃度（池内归一化，满分100），默认按综合分降序，点击表头可切换排序；"
+      + "④ 大涨天数 = 区间内单日涨跌幅 ≥ 5% 的交易日数；成交活跃度：个股=今日成交额，板块=区间日均成交额。";
+    ensurePool(false);
+  }
+
   // ---------- 状态与时钟 ----------
   function tradingStatus(now){
     var d = now.getDay();
@@ -526,6 +902,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   setupRefresh();
   updateClock();
   setInterval(updateClock, 1000);
+  initPeriod();
   refreshAll();
 })();
 </script>
