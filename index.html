@@ -302,7 +302,8 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 </main>
 
 <footer>
-  <div>数据来源：指数=腾讯实时行情；涨跌家数/板块/个股榜/周期热榜/行业低估推荐=东方财富延迟行情（约15分钟延迟，因实时接口对高频访问临时风控）；涨跌停=东方财富专题池。更新时间见右上角。</div>
+  <div>数据来源：指数=腾讯行情；涨跌家数/板块/个股榜/周期热榜/行业低估推荐=东方财富延迟行情（约15分钟延迟）；涨跌停=东方财富专题池。</div>
+  <div>数据模式：全看板仅展示 <b>11:30 上午收盘</b> 与 <b>15:00 收盘</b> 两个时间点的快照数据（午间休市显示上午收盘快照），数据缓存于本地浏览器，重复打开不重复拉取；如需刷新请点击各板块「重新拉取」。</div>
   <div>交易日/节假日状态按星期与时段近似判断，以交易所实际休市安排为准。</div>
   <div><b>免责声明</b>：本看板仅供行情展示与信息参考，不构成任何投资建议。市场有风险，投资需谨慎。</div>
 </footer>
@@ -362,6 +363,53 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     });
   }
 
+  // ---------- 快照标签与本地持久化缓存 ----------
+  // 全看板只保留两个数据时间点：11:30 上午收盘、15:00 收盘；盘中不再拉实时
+  // 时段划分：
+  //   mid  11:30~15:00（含午间休市）→ 上午收盘快照（当天 11:30）
+  //   close 15:00~次日11:30（含盘前/上午盘中/晚间/周末）→ 收盘快照（当日或上一交易日 15:00）
+  // 缓存带快照标签存 localStorage，标签匹配即永久有效，重复打开页面不重新拉取
+  var LS_PREFIX = "ashare:";
+  function snapNow(){
+    var now = new Date();
+    var day = now.getDay();
+    var t = now.getHours()*60 + now.getMinutes();
+    function dl(d){
+      var y = d.getFullYear(), m = ("0"+(d.getMonth()+1)).slice(-2), dd = ("0"+d.getDate()).slice(-2);
+      return y + "-" + m + "-" + dd;
+    }
+    function prevTrading(d){
+      var x = new Date(d);
+      do { x.setDate(x.getDate() - 1); } while(x.getDay() === 0 || x.getDay() === 6);
+      return x;
+    }
+    if(day === 0 || day === 6) return "close:" + dl(prevTrading(now));   // 周末 → 最近周五收盘
+    if(t >= 11*60+30 && t < 15*60) return "mid:" + dl(now);              // 11:30-15:00 → 上午收盘
+    if(t >= 15*60) return "close:" + dl(now);                            // 15:00 后 → 当日收盘
+    return "close:" + dl(prevTrading(now));                              // 盘前/上午盘中 → 上一交易日收盘
+  }
+  function snapLabel(){
+    return snapNow().indexOf("mid:") === 0 ? "上午收盘快照（11:30）" : "收盘快照（15:00）";
+  }
+  function snapDate(){
+    var s = snapNow();
+    return s.slice(s.indexOf(":") + 1).replace(/-/g, "");
+  }
+  function lsGet(key){
+    try{
+      var raw = localStorage.getItem(LS_PREFIX + key);
+      if(!raw) return null;
+      var o = JSON.parse(raw);
+      if(!o || o.snap !== snapNow()) return null;
+      return o.val;
+    }catch(e){ return null; }
+  }
+  function lsSet(key, val){
+    try{
+      localStorage.setItem(LS_PREFIX + key, JSON.stringify({snap:snapNow(), ts:Date.now(), val:val}));
+    }catch(e){}
+  }
+
   function fmtAmount(yuan){
     if(yuan==null || isNaN(yuan)) return "--";
     if(yuan >= 1e12) return (yuan/1e12).toFixed(2) + "万亿";
@@ -381,7 +429,11 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 
   // ---------- 指数 ----------
   // 主源：腾讯实时行情（GBK 转码）；名称用本地映射避免乱码；指数不含涨跌家数
-  function loadIndices(){
+  function loadIndices(force){
+    if(!force){
+      var c = lsGet("idx");
+      if(c) return Promise.resolve(c);
+    }
     return fetch(QT_INDEX + TX_INDEX_CODES.join(","), {cache:"no-store"}).then(function(r){
       if(!r.ok) throw new Error("HTTP "+r.status);
       return r.arrayBuffer();
@@ -400,6 +452,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
           f4:parseFloat(f[31]), f3:parseFloat(f[32])});
       });
       if(!out.length) throw new Error("tx index empty");
+      lsSet("idx", out);
       return out;
     }).catch(function(){
       // 兜底：东财延迟行情 ulist（含涨跌家数）
@@ -407,47 +460,73 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       var url = BASE + "ulist.np/get?fltt=2&invt=2&fields=f2,f3,f4,f6,f12,f14,f104,f105,f106&secids=" + secids;
       return getJSON(url).then(function(res){
         if(!res || !res.data || !res.data.diff) throw new Error("empty index data");
-        return res.data.diff;
+        var d = res.data.diff;
+        lsSet("idx", d);
+        return d;
       });
     });
   }
 
   // 涨跌家数/两市成交额：东财延迟行情 ulist（f104涨/f105跌/f106平，f6成交额）
-  function loadBreadth(){
+  function loadBreadth(force){
+    if(!force){
+      var c = lsGet("breadth");
+      if(c) return Promise.resolve(c);
+    }
     var secids = IDX_LIST.map(function(x){return x.secid;}).join(",");
     var url = BASE + "ulist.np/get?fltt=2&invt=2&fields=f2,f3,f4,f6,f12,f14,f104,f105,f106&secids=" + secids;
     return getJSON(url).then(function(res){
-      return (res && res.data && res.data.diff) || [];
+      var d = (res && res.data && res.data.diff) || [];
+      lsSet("breadth", d);
+      return d;
     }).catch(function(){ return []; });
   }
 
   // ---------- 板块 ----------
-  function loadSectors(kind){
+  function loadSectors(kind, force){
+    var k = kind === "industry" ? "sec:ind" : "sec:con";
+    if(!force){
+      var c = lsGet(k);
+      if(c) return Promise.resolve(c);
+    }
     var fs = kind==="industry" ? "m:90+t:2+f:!50" : "m:90+t:3+f:!50";
     var url = BASE + "clist/get?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f3&fs=" + fs + "&fields=f2,f3,f12,f14";
     return getJSON(url).then(function(res){
-      return (res && res.data && res.data.diff) ? res.data.diff : [];
+      var d = (res && res.data && res.data.diff) ? res.data.diff : [];
+      lsSet(k, d);
+      return d;
     });
   }
 
   // ---------- 个股涨跌榜 ----------
-  function loadStocks(desc){
+  function loadStocks(desc, force){
+    var k = desc ? "stk:gain" : "stk:loss";
+    if(!force){
+      var c = lsGet(k);
+      if(c) return Promise.resolve(c);
+    }
     var fs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23";
     var url = BASE + "clist/get?pn=1&pz=20&po=" + (desc?1:0) + "&np=1&fltt=2&invt=2&fid=f3&fs=" + fs + "&fields=f2,f3,f6,f12,f14";
     return getJSON(url).then(function(res){
-      return (res && res.data && res.data.diff) ? res.data.diff : [];
+      var d = (res && res.data && res.data.diff) ? res.data.diff : [];
+      lsSet(k, d);
+      return d;
     });
   }
 
   // ---------- 涨跌停 ----------
-  function loadZtDt(){
-    var date = beijingDate();
+  function loadZtDt(force){
+    if(!force){
+      var c = lsGet("ztdt");
+      if(c) return Promise.resolve(c);
+    }
+    var date = snapDate();
     var ztUrl = PUSH2EX + "getTopicZTPool?ut=" + UT + "&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fbt:asc&date=" + date;
     var dtUrl = PUSH2EX + "getTopicDTPool?ut=" + UT + "&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fund:asc&date=" + date;
     return Promise.all([
       getJSON(ztUrl).then(function(r){ return (r && r.data && typeof r.data.tc==="number") ? r.data.tc : null; }).catch(function(){return null;}),
       getJSON(dtUrl).then(function(r){ return (r && r.data && typeof r.data.tc==="number") ? r.data.tc : null; }).catch(function(){return null;})
-    ]);
+    ]).then(function(r){ lsSet("ztdt", r); return r; });
   }
 
   function beijingDate(){
@@ -757,15 +836,17 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     });
   }
 
-  // 并发拉取池内全部K线，写缓存
+  // 并发拉取池内全部K线，预计算 4 个周期的统计结果写入缓存
   // - stock：直接拉个股腾讯K线（gKCache 去重共享）
   // - 板块：拉成分股列表 + 成分股腾讯K线 → 聚合为板块周期指标
+  // 缓存只保留统计结果（stats），原始K线体积大不入 localStorage；stats 含全部周期，切周期零重拉
   function loadPoolKlines(key, list){
     var cache = periodState.caches[key];
     var total = list.length, done = 0;
     var queue = list.slice();
     var CONC = key==="stock" ? 12 : 6;
     var bar = document.getElementById("poolBar");
+    var rows = {}, board = {};
     function tick(){
       done++;
       bar.style.width = Math.round(done/total*100) + "%";
@@ -778,7 +859,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       var p;
       if(key === "stock"){
         p = getK(it.f12, it.f14).then(function(e){
-          if(e) cache.rows[it.f12] = {code:it.f12, name:it.f14, e:e, amtToday:it.f6||0};
+          if(e) rows[it.f12] = {code:it.f12, name:it.f14, e:e, amtToday:it.f6||0};
         });
       } else {
         p = fetchBoardMembers(it.f12, 8).then(function(members){
@@ -789,7 +870,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
               members.forEach(function(m, i){
                 if(es[i]) arr.push({m:m, e:es[i]});
               });
-              if(arr.length) cache.board[it.f12] = {name:it.f14, code:it.f12, members:arr};
+              if(arr.length) board[it.f12] = {name:it.f14, code:it.f12, members:arr};
             });
         }).catch(function(){});
       }
@@ -799,7 +880,28 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     var workers = [];
     for(var i=0;i<CONC;i++) workers.push(worker());
     return Promise.all(workers).then(function(){
+      // 预计算全部周期统计（stock：单只；板块：成分股加权聚合）
+      var stats = {m1:[], m3:[], m6:[], y1:[]};
+      var per = ["m1","m3","m6","y1"];
+      if(key === "stock"){
+        for(var code in rows){
+          var r = rows[code];
+          per.forEach(function(p){
+            var st = calcStats(r.e, p);
+            if(st) stats[p].push({code:code, name:r.name, st:st, amt:r.amtToday});
+          });
+        }
+      } else {
+        for(var bk in board){
+          var b = board[bk];
+          per.forEach(function(p){
+            var st = buildBoardStats(b.members, p);
+            if(st) stats[p].push({code:bk, name:b.name, st:st, amt:st.amtAvg});
+          });
+        }
+      }
       cache.list = list;
+      cache.stats = stats;
       cache.ts = Date.now();
     });
   }
@@ -849,24 +951,12 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   }
 
   // 综合分 = 40%×区间涨幅 + 30%×上涨频率 + 30%×成交活跃度（池内 min-max 归一化）
+  // 数据来自 loadPoolKlines 预计算的 4 周期统计（cache.stats[period]）
   function buildRows(){
     var cache = periodState.caches[periodState.pool];
     var rows = [];
-    if(periodState.pool === "stock"){
-      for(var code in cache.rows){
-        var r = cache.rows[code];
-        var st = calcStats(r.e, periodState.period);
-        if(!st) continue;
-        rows.push({code:code, name:r.name, st:st, amt:r.amtToday});
-      }
-    } else {
-      for(var bk in cache.board){
-        var b = cache.board[bk];
-        var st = buildBoardStats(b.members, periodState.period);
-        if(!st) continue;
-        rows.push({code:bk, name:b.name, st:st, amt:st.amtAvg});
-      }
-    }
+    var arr = (cache.stats && cache.stats[periodState.period]) || [];
+    arr.forEach(function(s){ rows.push({code:s.code, name:s.name, st:s.st, amt:s.amt}); });
     function norm(arr){
       var mn = Infinity, mx = -Infinity;
       arr.forEach(function(v){ if(v < mn) mn = v; if(v > mx) mx = v; });
@@ -907,8 +997,8 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       return;
     }
     var rows = sortRows(buildRows());
-    var keys = periodState.pool === "stock"
-      ? Object.keys(cache.rows).length : Object.keys(cache.board).length;
+    var keys = (cache.stats && cache.stats[periodState.period])
+      ? cache.stats[periodState.period].length : 0;
     function pArrow(k){
       return periodState.sort === k ? '<span class="sort-arrow">' + (periodState.dir < 0 ? "▼" : "▲") + '</span>' : "";
     }
@@ -962,22 +1052,28 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       return;
     }
     if(periodLoading) return;
+    // 持久化快照缓存恢复：命中直接渲染（任何周期均可用，零请求）
+    if(!force){
+      var ls = lsGet("period:" + periodState.pool);
+      if(ls && ls.list && ls.stats){
+        periodState.caches[periodState.pool] = ls;
+        renderPeriod();
+        return;
+      }
+    }
     periodLoading = true;
     var bar = document.getElementById("poolBar");
     bar.style.width = "3%";
     document.getElementById("poolInfo").textContent = "正在获取候选列表…";
     fetchPoolList(periodState.pool).then(function(list){
-      if(!periodState.caches[periodState.pool]){
-        periodState.caches[periodState.pool] = {list:[], rows:{}, board:{}};
-      }
-      periodState.caches[periodState.pool].rows = {};
-      periodState.caches[periodState.pool].board = {};
+      periodState.caches[periodState.pool] = {list:[], stats:{m1:[], m3:[], m6:[], y1:[]}};
       document.getElementById("poolInfo").textContent = "候选 " + list.length + " 个，开始拉取数据…";
       return loadPoolKlines(periodState.pool, list);
     }).then(function(){
+      lsSet("period:" + periodState.pool, periodState.caches[periodState.pool]);
       renderPeriod();
       document.getElementById("poolInfo").textContent =
-        "候选 " + (periodState.caches[periodState.pool].list.length) + " 个，数据就绪（缓存30分钟）";
+        "候选 " + (periodState.caches[periodState.pool].list.length) + " 个，数据就绪（快照缓存）";
     }).catch(function(err){
       console.error(err);
       document.getElementById("poolInfo").textContent = "拉取失败，可重试";
@@ -1247,9 +1343,21 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     var fresh = indState.groups.length && indState.ts && (Date.now() - indState.ts < 60*60*1000);
     if(fresh && !force){ renderInd(); return; }
     if(indState.loading) return;
+    // 持久化快照缓存恢复
+    if(!force){
+      var ls = lsGet("indval");
+      if(ls && ls.groups && ls.groups.length){
+        indState.groups = ls.groups;
+        indState.ts = ls.ts;
+        renderInd();
+        return;
+      }
+    }
     indState.loading = true;
     indState.groups = [];
-    loadIndData().catch(function(err){
+    loadIndData().then(function(){
+      lsSet("indval", {groups: indState.groups, ts: indState.ts});
+    }).catch(function(err){
       console.error(err);
       document.getElementById("indInfo").textContent = "拉取失败（可能被限流）";
       document.getElementById("indBody").innerHTML =
@@ -1292,7 +1400,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     var now = new Date();
     var st = tradingStatus(now);
     var el = document.getElementById("status");
-    document.getElementById("statusText").textContent = st.label;
+    document.getElementById("statusText").textContent = st.label + " · " + snapLabel();
     el.className = "status " + (st.key==="open" ? "open" : (st.key==="closed" ? "closed" : ""));
     if(st.key==="auction" || st.key==="break" || st.key==="pre") el.className = "status";
     var p = function(n){ return ("0"+n).slice(-2); };
@@ -1307,18 +1415,19 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   }
 
   // ---------- 全量刷新 ----------
+  // force=false：优先读本地快照缓存（命中零请求）；force=true：强制重新拉取
   var loading = false;
-  function refreshAll(){
+  function refreshAll(force){
     if(loading) return;
     loading = true;
     Promise.all([
-      loadIndices().catch(function(){ return []; }),
-      loadSectors("industry").catch(function(){ return []; }),
-      loadSectors("concept").catch(function(){ return []; }),
-      loadStocks(true).catch(function(){ return []; }),
-      loadStocks(false).catch(function(){ return []; }),
-      loadZtDt(),
-      loadBreadth()
+      loadIndices(force).catch(function(){ return []; }),
+      loadSectors("industry", force).catch(function(){ return []; }),
+      loadSectors("concept", force).catch(function(){ return []; }),
+      loadStocks(true, force).catch(function(){ return []; }),
+      loadStocks(false, force).catch(function(){ return []; }),
+      loadZtDt(force),
+      loadBreadth(force)
     ]).then(function(r){
       var list = r[0];
       state.industry = r[1];
@@ -1365,7 +1474,8 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     }
     chk.addEventListener("change", restart);
     sel.addEventListener("change", restart);
-    document.getElementById("refreshBtn").addEventListener("click", refreshAll);
+    // 手动刷新强制重新拉取；定时刷新走本地快照缓存（命中零请求）
+    document.getElementById("refreshBtn").addEventListener("click", function(){ refreshAll(true); });
     restart();
   }
 
