@@ -409,6 +409,47 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       localStorage.setItem(LS_PREFIX + key, JSON.stringify({snap:snapNow(), ts:Date.now(), val:val}));
     }catch(e){}
   }
+  // 忽略快照标签读取任意缓存（用于拉取失败时的旧快照兜底）
+  function lsGetStale(key){
+    try{
+      var raw = localStorage.getItem(LS_PREFIX + key);
+      if(!raw) return null;
+      var o = JSON.parse(raw);
+      return (o && o.val) ? o.val : null;
+    }catch(e){ return null; }
+  }
+
+  // 服务端快照数据（snapshot.json，由 GitHub Actions 定时生成，浏览器零第三方请求）
+  // 页面加载时先拉取快照写入本地缓存，各模块随后读缓存渲染；快照失败则走第三方直连兜底
+  var SNAP_URL = "snapshot.json";
+  function loadSnapshot(){
+    return fetch(SNAP_URL, {cache:"no-store"}).then(function(r){
+      if(!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function(s){
+      if(!s || !s.meta || !s.meta.snap) throw new Error("bad snapshot");
+      if(s.meta.snap !== snapNow()) return false;   // 快照时段不匹配 → 忽略，走直连兜底
+      try{
+        if(Array.isArray(s.idx) && s.idx.length) lsSet("idx", s.idx);
+        if(Array.isArray(s.breadth) && s.breadth.length) lsSet("breadth", s.breadth);
+        if(Array.isArray(s.secInd) && s.secInd.length) lsSet("sec:ind", s.secInd);
+        if(Array.isArray(s.secCon) && s.secCon.length) lsSet("sec:con", s.secCon);
+        if(Array.isArray(s.gain) && s.gain.length) lsSet("stk:gain", s.gain);
+        if(Array.isArray(s.loss) && s.loss.length) lsSet("stk:loss", s.loss);
+        if(Array.isArray(s.ztdt) && s.ztdt.length) lsSet("ztdt", s.ztdt);
+        if(s.period){
+          ["industry", "concept", "stock"].forEach(function(p){
+            var pp = s.period[p];
+            if(pp && pp.list && pp.stats) lsSet("period:" + p, pp);
+          });
+        }
+        if(s.indVal && s.indVal.groups && s.indVal.groups.length){
+          lsSet("indval", {groups: s.indVal.groups, ts: Date.now()});
+        }
+        return true;
+      }catch(e){ return false; }
+    }).catch(function(){ return false; });
+  }
 
   function fmtAmount(yuan){
     if(yuan==null || isNaN(yuan)) return "--";
@@ -1076,6 +1117,15 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
         "候选 " + (periodState.caches[periodState.pool].list.length) + " 个，数据就绪（快照缓存）";
     }).catch(function(err){
       console.error(err);
+      // 旧快照兜底：拉取失败时显示本地任一快照并标注时间，避免空白
+      var stale = lsGetStale("period:" + periodState.pool);
+      if(stale && stale.list && stale.stats){
+        periodState.caches[periodState.pool] = stale;
+        renderPeriod();
+        document.getElementById("poolInfo").textContent =
+          "拉取失败，显示上次快照（" + new Date(stale.ts).toLocaleString() + "）";
+        return;
+      }
       document.getElementById("poolInfo").textContent = "拉取失败，可重试";
       document.getElementById("periodBody").innerHTML =
         '<div class="empty">数据拉取失败（可能被限流），请稍后点击「重新拉取」重试</div>';
@@ -1359,6 +1409,16 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       lsSet("indval", {groups: indState.groups, ts: indState.ts});
     }).catch(function(err){
       console.error(err);
+      // 旧快照兜底：拉取失败时显示本地任一快照并标注时间，避免空白
+      var stale = lsGetStale("indval");
+      if(stale && stale.groups && stale.groups.length){
+        indState.groups = stale.groups;
+        indState.ts = stale.ts || Date.now();
+        renderInd();
+        document.getElementById("indInfo").textContent =
+          "拉取失败，显示上次快照（" + new Date(indState.ts).toLocaleString() + "）";
+        return;
+      }
       document.getElementById("indInfo").textContent = "拉取失败（可能被限流）";
       document.getElementById("indBody").innerHTML =
         '<div class="empty">数据拉取失败（可能被限流），请稍后点击「重新拉取」重试</div>';
@@ -1474,19 +1534,24 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     }
     chk.addEventListener("change", restart);
     sel.addEventListener("change", restart);
-    // 手动刷新强制重新拉取；定时刷新走本地快照缓存（命中零请求）
-    document.getElementById("refreshBtn").addEventListener("click", function(){ refreshAll(true); });
+    // 手动刷新：重新拉取服务端快照（失败则走第三方直连兜底）；定时刷新走本地快照缓存（命中零请求）
+    document.getElementById("refreshBtn").addEventListener("click", function(){
+      loadSnapshot().finally(function(){ refreshAll(false); });
+    });
     restart();
   }
 
   // ---------- 启动 ----------
-  bindTabs();
-  setupRefresh();
-  updateClock();
-  setInterval(updateClock, 1000);
-  initPeriod();
-  initInd();
-  refreshAll();
+  // 先加载服务端快照（成功 → 各模块直接读缓存，浏览器零第三方请求；失败 → 第三方直连兜底）
+  loadSnapshot().finally(function(){
+    bindTabs();
+    setupRefresh();
+    updateClock();
+    setInterval(updateClock, 1000);
+    initPeriod();
+    initInd();
+    refreshAll(false);
+  });
 })();
 </script>
 </body>
