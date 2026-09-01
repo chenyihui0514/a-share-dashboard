@@ -121,8 +121,8 @@ main{max-width:1280px;margin:20px auto 0;padding:0 20px;}
 .row .cd{color:var(--sub);font-size:12px;flex:0 0 auto;width:62px;font-variant-numeric:tabular-nums;}
 .row .px{flex:0 0 auto;width:78px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;}
 .row .pct{flex:0 0 auto;width:82px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700;}
-.row.head{color:var(--sub);font-size:12px;border-bottom:1px solid var(--line);padding:8px 16px;}
-.row.head:hover{background:none;}
+.row.head{color:var(--sub);font-size:12px;border-bottom:1px solid var(--line);padding:8px 16px;position:sticky;top:0;z-index:2;background:var(--card);cursor:pointer;user-select:none;}
+.row.head:hover{background:#f7f9fc;}
 .row.head .px,.row.head .pct{text-align:right;font-weight:600;}
 .empty{padding:30px 16px;text-align:center;color:var(--sub);font-size:13px;}
 
@@ -147,7 +147,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 .period-body::-webkit-scrollbar-thumb{background:#d6dbe2;border-radius:4px;}
 .prow{display:flex;align-items:center;padding:9px 16px;gap:8px;font-size:13px;}
 .prow:hover{background:#f7f9fc;}
-.prow.head{color:var(--sub);font-size:12px;border-bottom:1px solid var(--line);padding:8px 16px;cursor:pointer;user-select:none;}
+.prow.head{color:var(--sub);font-size:12px;border-bottom:1px solid var(--line);padding:8px 16px;cursor:pointer;user-select:none;position:sticky;top:0;z-index:2;background:var(--card);}
 .prow.head:hover{background:#f7f9fc;}
 .prow .rank{width:26px;text-align:center;font-size:12px;color:var(--sub);flex:0 0 auto;font-variant-numeric:tabular-nums;}
 .prow .rank.top{color:#fff;background:var(--accent);border-radius:4px;font-weight:700;}
@@ -169,6 +169,10 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
 .ind-head-row .nm{font-weight:700;font-size:13px;}
 .ind-meta{font-size:12px;color:var(--sub);font-weight:500;margin-left:auto;text-align:right;white-space:nowrap;}
 .sort-arrow{font-size:10px;color:var(--accent);margin-left:2px;}
+.ind-picks{flex:1;min-width:0;font-size:12px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums;color:var(--sub);}
+.ind-picks .sk{color:var(--txt);font-weight:600;margin-right:3px;}
+.ind-picks .vk{color:var(--sub);}
+.ind-picks .sep{color:var(--line);margin:0 8px;}
 
 @media (max-width:1000px){
   .indices{grid-template-columns:repeat(3,1fr);}
@@ -331,7 +335,9 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     industry: [],
     concept: [],
     gain: [],
-    loss: []
+    loss: [],
+    sectorSort: {key:"pct", dir:-1},
+    stockSort: {key:"pct", dir:-1}
   };
 
   // ---------- 通用请求：fetch 优先，JSONP 兜底 ----------
@@ -511,18 +517,34 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     document.getElementById("dtCount").textContent = dt==null ? "--" : dt;
   }
 
+  // 表头排序箭头（升序▲ / 降序▼），dir=-1 降序
+  function sArrow(s, k){
+    return s.key === k ? '<span class="sort-arrow">' + (s.dir < 0 ? "▼" : "▲") + '</span>' : "";
+  }
+  // 通用数字排序：dir=-1 降序，dir=1 升序
+  function applySort(arr, s, getVal){
+    var a = arr.slice();
+    a.sort(function(x, y){ return s.dir * (getVal(x) - getVal(y)); });
+    return a;
+  }
+
   function sectorHeadHtml(){
+    var s = state.sectorSort;
     return '<div class="row head"><span class="rank">#</span><span class="nm">板块</span>'
-      + '<span class="cd">代码</span><span class="px">指数</span><span class="pct">涨跌幅</span></div>';
+      + '<span class="cd">代码</span><span class="px" data-sort="px">指数' + sArrow(s, "px") + '</span>'
+      + '<span class="pct" data-sort="pct">涨跌幅' + sArrow(s, "pct") + '</span></div>';
   }
   function stockHeadHtml(){
+    var s = state.stockSort;
     return '<div class="row head"><span class="rank">#</span><span class="nm">名称</span>'
-      + '<span class="cd">代码</span><span class="px">最新价</span><span class="pct">涨跌幅</span></div>';
+      + '<span class="cd">代码</span><span class="px" data-sort="px">最新价' + sArrow(s, "px") + '</span>'
+      + '<span class="pct" data-sort="pct">涨跌幅' + sArrow(s, "pct") + '</span></div>';
   }
 
   function renderSectors(){
     var body = document.getElementById("sectorBody");
-    var arr = state[state.sectorTab] || [];
+    var s = state.sectorSort;
+    var arr = applySort(state[state.sectorTab] || [], s, function(it){ return s.key === "px" ? (it.f2||0) : (it.f3||0); }).slice(0, 10);
     if(!arr.length){ body.innerHTML = '<div class="empty">暂无数据</div>'; return; }
     var html = sectorHeadHtml();
     html += arr.map(function(it, i){
@@ -536,11 +558,20 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
         + '</div>';
     }).join("");
     body.innerHTML = html;
+    body.querySelectorAll("[data-sort]").forEach(function(el){
+      el.addEventListener("click", function(){
+        var k = el.getAttribute("data-sort");
+        if(state.sectorSort.key === k) state.sectorSort.dir = -state.sectorSort.dir;
+        else { state.sectorSort.key = k; state.sectorSort.dir = -1; }
+        renderSectors();
+      });
+    });
   }
 
   function renderStocks(){
     var body = document.getElementById("stockBody");
-    var arr = state[state.stockTab] || [];
+    var s = state.stockSort;
+    var arr = applySort(state[state.stockTab] || [], s, function(it){ return s.key === "px" ? (it.f2||0) : (it.f3||0); }).slice(0, 10);
     if(!arr.length){ body.innerHTML = '<div class="empty">暂无数据</div>'; return; }
     var html = stockHeadHtml();
     html += arr.map(function(it, i){
@@ -554,6 +585,14 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
         + '</div>';
     }).join("");
     body.innerHTML = html;
+    body.querySelectorAll("[data-sort]").forEach(function(el){
+      el.addEventListener("click", function(){
+        var k = el.getAttribute("data-sort");
+        if(state.stockSort.key === k) state.stockSort.dir = -state.stockSort.dir;
+        else { state.stockSort.key = k; state.stockSort.dir = -1; }
+        renderStocks();
+      });
+    });
   }
 
   // ================= 周期热榜（多周期 × 多次上涨排行） =================
@@ -576,7 +615,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   var PERIODS = {m1:{bars:22}, m3:{bars:64}, m6:{bars:125}, y1:{bars:245}};
   var PERIOD_LABEL = {m1:"1个月", m3:"3个月", m6:"6个月", y1:"1年"};
 
-  var periodState = {pool:"industry", period:"m3", sort:"score", caches:{}};
+  var periodState = {pool:"industry", period:"m3", sort:"score", dir:-1, caches:{}};
 
   function dateStr(offsetDays, sep){
     var d = new Date(Date.now() + (new Date().getTimezoneOffset()+480)*60000);
@@ -844,13 +883,13 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
   }
 
   function sortRows(rows){
-    var key = periodState.sort, dir = key==="chg"||key==="freq"||key==="score" ? -1 : -1;
+    var key = periodState.sort, dir = periodState.dir;
     rows.sort(function(x, y){
       var a = key==="score" ? x.score : key==="chg" ? x.st.chg : key==="freq" ? x.st.freq
         : key==="upDays" ? x.st.upDays : key==="amt" ? x.amt : x.st.bigDays;
       var b = key==="score" ? y.score : key==="chg" ? y.st.chg : key==="freq" ? y.st.freq
         : key==="upDays" ? y.st.upDays : key==="amt" ? y.amt : y.st.bigDays;
-      return b - a;
+      return dir * (a - b);
     });
     return rows;
   }
@@ -870,19 +909,22 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     var rows = sortRows(buildRows());
     var keys = periodState.pool === "stock"
       ? Object.keys(cache.rows).length : Object.keys(cache.board).length;
-    var head = '<div class="prow head" data-sort="score"><span class="rank">#</span>'
+    function pArrow(k){
+      return periodState.sort === k ? '<span class="sort-arrow">' + (periodState.dir < 0 ? "▼" : "▲") + '</span>' : "";
+    }
+    var head = '<div class="prow head"><span class="rank">#</span>'
       + '<span class="nm">名称</span><span class="cd">代码</span>'
-      + '<span class="num w1" data-sort="chg">区间涨幅</span>'
-      + '<span class="num w2" data-sort="upDays">上涨天数/交易日</span>'
-      + '<span class="num w3" data-sort="freq">上涨频率</span>'
-      + '<span class="num w4" data-sort="bigDays">大涨天数</span>'
-      + '<span class="num w5" data-sort="amt">成交活跃度</span>'
-      + '<span class="score" data-sort="score">综合分</span></div>';
+      + '<span class="num w1" data-sort="chg">区间涨幅' + pArrow("chg") + '</span>'
+      + '<span class="num w2" data-sort="upDays">上涨天数/交易日' + pArrow("upDays") + '</span>'
+      + '<span class="num w3" data-sort="freq">上涨频率' + pArrow("freq") + '</span>'
+      + '<span class="num w4" data-sort="bigDays">大涨天数' + pArrow("bigDays") + '</span>'
+      + '<span class="num w5" data-sort="amt">成交活跃度' + pArrow("amt") + '</span>'
+      + '<span class="score" data-sort="score">综合分' + pArrow("score") + '</span></div>';
     var html = head;
     if(!rows.length){
       html += '<div class="empty">数据拉取失败，请点击右上角「重新拉取」重试</div>';
     } else {
-      rows.slice(0, 50).forEach(function(r, i){
+      rows.slice(0, 10).forEach(function(r, i){
         var st = r.st;
         html += '<div class="prow">'
           + '<span class="rank'+(i<3?' top':'')+'">'+(i+1)+'</span>'
@@ -896,12 +938,14 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
           + '<span class="score">'+r.score.toFixed(1)+'</span>'
           + '</div>';
       });
-      if(rows.length > 50) html += '<div class="empty">仅显示前 50 名，共 '+rows.length+' 条</div>';
+      if(rows.length > 10) html += '<div class="empty">仅显示前 10 名，共 '+rows.length+' 条</div>';
     }
     body.innerHTML = html;
     body.querySelectorAll("[data-sort]").forEach(function(el){
       el.addEventListener("click", function(){
-        periodState.sort = el.getAttribute("data-sort");
+        var k = el.getAttribute("data-sort");
+        if(periodState.sort === k) periodState.dir = -periodState.dir;
+        else { periodState.sort = k; periodState.dir = -1; }
         renderPeriod();
       });
     });
@@ -988,7 +1032,7 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     topInc: 5, topStk: 5,        // 榜单配比
     maxOverlap: 2                // 行业间成分股重合≥N只视为同质行业，去重
   };
-  var indState = {groups:[], ts:0, loading:false};
+  var indState = {groups:[], ts:0, loading:false, sort:{key:"avgPE", dir:1}};
 
   function indCls(f25){
     if(f25 == null) return "dec";
@@ -1109,6 +1153,13 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
     return out.slice(0, IND_CFG.topInc + IND_CFG.topStk);
   }
 
+  function indVal(g, k){
+    if(k === "f25") return g.bk.f25 || 0;
+    if(k === "avgPE") return g.avgPE;
+    if(k === "f6") return g.bk.f6 || 0;
+    return 0;
+  }
+
   function renderInd(){
     var body = document.getElementById("indBody");
     var groups = buildIndGroups();
@@ -1116,44 +1167,47 @@ footer{max-width:1280px;margin:24px auto 0;padding:0 20px;color:var(--sub);font-
       body.innerHTML = '<div class="empty">暂无符合条件行业（或数据拉取失败，可点击「重新拉取」重试）</div>';
       return;
     }
-    var html = '<div class="prow head"><span class="rank">#</span>'
-      + '<span class="nm">名称</span><span class="cd">代码</span>'
-      + '<span class="num w3">最新价</span>'
-      + '<span class="num w1">涨跌幅</span>'
-      + '<span class="num w4">市盈率</span>'
-      + '<span class="num w4">市净率</span>'
-      + '<span class="num w5">总市值</span>'
-      + '<span class="score">低估分</span></div>';
+    var s = indState.sort;
+    groups.sort(function(a, b){ return s.dir * (indVal(a, s.key) - indVal(b, s.key)); });
+    var arrow = function(k){
+      return s.key === k ? '<span class="sort-arrow">' + (s.dir < 0 ? "▼" : "▲") + '</span>' : "";
+    };
+    var html = '<div class="prow head">'
+      + '<span class="rank">#</span>'
+      + '<span class="ind-tag" style="background:#eef0f4;color:var(--sub);">景气</span>'
+      + '<span class="nm">行业</span>'
+      + '<span class="num w1" data-sort="f25">年初至今' + arrow("f25") + '</span>'
+      + '<span class="num w4" data-sort="avgPE">平均PE' + arrow("avgPE") + '</span>'
+      + '<span class="num w5" data-sort="f6">成交额' + arrow("f6") + '</span>'
+      + '<span class="ind-picks">推荐3只（市盈率/市净率）</span>'
+      + '</div>';
     var incN = 0, stkN = 0;
     groups.forEach(function(g, gi){
       var tag = indCls(g.bk.f25) === "inc" ? "inc" : "stk";
       if(tag === "inc") incN++; else stkN++;
-      html += '<div class="ind-head-row">'
-        + '<span class="rank">' + (gi+1) + '</span>'
+      var picksHtml = g.picks.map(function(p){
+        return '<span class="sk">' + p.name + '</span>'
+          + '<span class="vk">' + p.code + ' ' + p.pe.toFixed(1) + '/' + p.pb.toFixed(2) + '</span>';
+      }).join('<span class="sep">·</span>');
+      html += '<div class="prow">'
+        + '<span class="rank' + (gi<3?' top':'') + '">' + (gi+1) + '</span>'
         + '<span class="ind-tag ' + tag + '">' + indLabel(tag) + '</span>'
         + '<span class="nm">' + g.bk.f14 + '</span>'
-        + '<span class="ind-meta">年初至今 <b class="' + cls(g.bk.f25) + '">' + fmtPct(g.bk.f25) + '</b> · 60日 ' + fmtPct(g.bk.f24)
-        + ' · 3只平均PE <b>' + g.avgPE.toFixed(1) + '</b> · 行业绝对低估 ' + g.absN + ' 只</span>'
+        + '<span class="num w1 ' + cls(g.bk.f25) + '">' + fmtPct(g.bk.f25) + '</span>'
+        + '<span class="num w4">' + g.avgPE.toFixed(1) + '</span>'
+        + '<span class="num w5">' + fmtAmount(g.bk.f6) + '</span>'
+        + '<span class="ind-picks">' + picksHtml + '</span>'
         + '</div>';
-      g.picks.forEach(function(p, j){
-        var c = cls(p.pct);
-        html += '<div class="prow">'
-          + '<span class="rank">' + (j+1) + '</span>'
-          + '<span class="nm">' + p.name + '</span>'
-          + '<span class="cd">' + p.code + '</span>'
-          + '<span class="num w3">' + fmtNum(p.px) + '</span>'
-          + '<span class="num w1 ' + c + '">' + fmtPct(p.pct) + '</span>'
-          + '<span class="num w4">' + p.pe.toFixed(1) + '</span>'
-          + '<span class="num w4">' + p.pb.toFixed(2) + '</span>'
-          + '<span class="num w5">' + fmtAmount(p.mc) + '</span>'
-          + '<span class="score">' + p.vscore.toFixed(0) + '</span>'
-          + '</div>';
+    });
+    body.innerHTML = html;
+    body.querySelectorAll("[data-sort]").forEach(function(el){
+      el.addEventListener("click", function(){
+        var k = el.getAttribute("data-sort");
+        if(indState.sort.key === k) indState.sort.dir = -indState.sort.dir;
+        else { indState.sort.key = k; indState.sort.dir = k === "avgPE" ? 1 : -1; }
+        renderInd();
       });
     });
-    if(groups.length < IND_CFG.topInc + IND_CFG.topStk){
-      html += '<div class="empty">可推荐行业共 ' + groups.length + ' 个（增量 ' + incN + ' / 存量 ' + stkN + '）</div>';
-    }
-    body.innerHTML = html;
     document.getElementById("indInfo").textContent =
       groups.length + " 个行业（增量 " + incN + " / 存量 " + stkN + "）· 缓存于 " + new Date(indState.ts).toLocaleTimeString();
   }
